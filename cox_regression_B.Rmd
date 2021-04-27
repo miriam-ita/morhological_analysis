@@ -1,0 +1,560 @@
+---
+title: "Statistical analysis on morphology evaluation - Adjuvant PACT-15 group"
+output:
+  word_document: default
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+The following code tests the statistical validity of the morphological analysis carried out on the pancreatic cancer patients belonging to the adjuvant group (Adj GEM-Adj PEXG) of the PACT-15 clinical trial. It evaluates if one or more covariates affect overall survival (OS) and disease-free survival(DFS).
+
+```{r Library upload, include=FALSE}
+library("tidyverse")
+library("here")
+library("survival")
+library("survminer")
+library("gtsummary")
+library("broom")
+library("cowplot")
+library("survivalAnalysis")
+# library("metagen")
+library("tinytex")
+```
+```{r Create dataframe, echo=FALSE}
+df_survival <- read.csv(here("NGS/data", "MASISACHI MASTER SPREADSHEET 27-07-2020.csv"), 
+                        sep = ";", 
+               stringsAsFactors = FALSE, skip = 1, nrows = 113, na.strings = "")
+
+colnames(df_survival) <- df_survival[1,] %>% # set col names from first row
+  str_remove_all("#") %>% # remove # from headers
+  str_replace_all(" ", "_") %>% # remove spaces
+  str_replace_all("\\*", "new") %>% 
+  str_replace_all("\\/", "_") %>% 
+  str_replace_all("\\%", "perc") %>% 
+  str_remove_all("_$") # remove spaces at the end of headers
+df_survival <- df_survival[-1, ] # remove first row
+
+df_survival <- df_survival %>%
+  select(AUS_ID, Treatment, Age, Sex, Site, LN_Ratio, G, Nnew, R, Dispersion,
+         PN_Inv., Emb., Lymphnodes, Necr., Vasi, PanIN_IPMN, Keloid, Hyaline,
+         Str.cell., perc_stroma, TLS, Lymph., Gran., M0, Mucin, Duo, Regr._D,
+         Calcification,
+         census_event_free, DFS, census_OS, OS) %>% 
+  filter(Treatment == "Adj GEM" |Treatment ==  "Adj PEXG") %>% # filtered adj cases
+  filter(AUS_ID != "ID_45", AUS_ID != "ID_55") # remove two excluded cases
+
+# set the survival data as numeric in a separate df
+
+df_surv_data <- df_survival %>% 
+  select(AUS_ID, census_event_free, DFS, census_OS, OS) %>% 
+  mutate(AUS_ID = as.factor(AUS_ID)) %>% 
+  mutate_if(is.character, as.numeric)
+
+# modify the variables
+
+df_survival <- df_survival %>% 
+  select(-census_event_free, -DFS, -census_OS, -OS) %>% 
+  mutate(Treatment = case_when(Treatment == "Adj GEM" ~ "1",
+                               Treatment == "Adj PEXG" ~ "2"),
+         Sex = case_when(Sex == "M" ~ "0",
+                         Sex == "F" ~ "1"),
+         Site = case_when(Site == "Head" ~ "1",
+                          Site == "Body" ~ "2",
+                          Site == "Tail" ~ "3",
+                          Site == "Head/Ampulla" ~ "4",
+                          Site == "Head + Body" ~ "5"),
+         Dispersion = case_when(Dispersion == "0" ~ "Absent",
+                                Dispersion == "1" | Dispersion == "2" ~ "Present"),
+         G = case_when(G == "G2" ~ "1",
+                       G == "G1" ~ "2",
+                       G == "G3" ~ "3"),
+         # Nnew = case_when(Nnew == "pN0" ~ "0",
+         #                  Nnew == "pN1" ~ "1",
+         #                  Nnew == "pN2" ~ "2"),
+         # R = case_when(R == "R0" ~ "0",
+         #               R == "R1" ~ "1"),
+         PN_Inv. = case_when(PN_Inv. == "0" ~ "0",
+                          PN_Inv. == "1" | PN_Inv. == "2" | PN_Inv. == "3" ~ "1"),
+         Emb. = case_when(Emb. == "0" ~ "0",
+                          Emb. == "1" | Emb. == "2" | Emb. == "3" ~ "1"),
+         Necr. = case_when(Necr. == "0" ~ "0",
+                           Necr. == "1" | Necr. == "2" ~ "1"),
+         Vasi = case_when(Vasi == "0" ~ "0",
+                          Vasi == "1" | Vasi == "2" | Vasi == "3" ~ "1"),
+         PanIN_IPMN = case_when(PanIN_IPMN == "0" ~ "0",
+                                PanIN_IPMN == "1" |PanIN_IPMN == "2" | 
+                                  PanIN_IPMN == "3" ~ "1"),
+         Gran. = case_when(Gran. == "0" ~ "0",
+                           Gran. == "1" | Gran. == "2" | Gran. == "3" ~ "1"),
+         Lymph. = case_when(Lymph. == "0" ~ "0",
+                           Lymph. == "1" | Lymph. == "2" | Lymph. == "3" ~ "1"),
+         M0 = case_when(M0 == "0" ~ "0",
+                           M0 == "1" | M0 == "2" | M0 == "3" ~ "1"), 
+         Mucin = case_when(Mucin == "0" ~ "0",
+                        Mucin == "1" | Mucin == "2" | Mucin == "3" ~ "1"),
+         Duo = case_when(Duo == "0" ~ "0",
+                        Duo == "1" | Duo == "2" | Duo == "3" ~ "1"),
+         Calcification = case_when(Calcification == "0" ~ "Absent",
+                                   Calcification == "1" ~ "Present"),
+         Regr._D = case_when(Regr._D == "0" ~ "0",
+                           Regr._D == "1" | Regr._D == "2" ~ "1"))
+
+
+# Change the column form character to numeric for continuous variables
+
+cols.num <- c("Age", "LN_Ratio")
+df_survival[cols.num] <- sapply(df_survival[cols.num],as.numeric)
+
+# and to factor for categorical variables
+
+df_survival <- df_survival %>% mutate_if(is.character,as.factor)
+
+# join the dataframes
+
+df_survival <- df_survival %>% 
+  left_join(df_surv_data, by = "AUS_ID")
+```
+```{r Leveling the factors, echo=FALSE}
+
+df_survival <- df_survival %>%
+  mutate(Treatment = factor(Treatment,
+                            levels = 1:2,
+                            labels = c("Adjuvant GEM", "Adjuvant PEXG")),
+         Sex = factor(Sex,
+                      levels = 0:1,
+                      labels = c("Male", "Female")),
+         
+         Site = factor(Site, 
+                       levels = 1:5,
+                       labels = c("Head", "Body", "Tail", "Head + Ampulla",
+                                  "Head + Body")),
+         # Dispersion = factor(Dispersion,
+         #                     levels = 0:1,
+         #                     labels = c("Absent", "Present")),
+         G = factor(G,
+                    levels = 1:3,
+                    labels = c("G2", "G1", "G3")),
+         PN_Inv.= factor(PN_Inv.,
+                         levels = 0:1,
+                         labels = c("Absent", "Present")),
+         Emb. = factor(Emb.,
+                       levels = 0:1,
+                       labels = c("Absent", "Present")),
+         Lymphnodes = factor(Lymphnodes,
+                             levels = 0:3,
+                             labels = c("Absent", "1 positive lymphnode",
+                                        "2-3 positive lymphnodes",
+                                        ">3 positive lymphnodes")),
+         Necr. = factor(Necr.,
+                        levels = 0:1,
+                        labels = c("Absent", "Present")),
+         Vasi = factor(Vasi,
+                       levels = 0:1,
+                       labels = c("Absent", "Present")),
+         PanIN_IPMN = factor(PanIN_IPMN,
+                             levels = 0:1,
+                             labels = c("Absent", "Present")),
+         Keloid = factor(Keloid,
+                         levels = 0:1,
+                         labels = c("Absent", "Present")),
+         Hyaline = factor(Hyaline,
+                          levels = 0:1,
+                          labels = c("Absent", "Present")),
+         Str.cell. = factor(Str.cell.,
+                            levels = 0:1,
+                            labels = c("Absent", "Present")),
+         perc_stroma = factor(perc_stroma,
+                              levels = 1:3,
+                              labels = c("Stroma < Neoplasia",
+                                         "Stroma = Neoplasia",
+                                         "Stroma > Neoplasia")),
+         TLS = factor(TLS,
+                      levels = 0:1,
+                      labels = c("Absent", "Present")),
+         Lymph.= factor(Lymph.,
+                        levels = 0:1,
+                        labels = c("Absent", "Present")),
+         Gran.= factor(Gran.,
+                       levels = 0:1,
+                       labels = c("Absent", "Present")),
+         M0= factor(M0,
+                    levels = 0:1,
+                    labels = c("Absent", "Present")),
+         Mucin = factor(Mucin,
+                    levels = 0:1,
+                    labels = c("Absent", "Present")),
+    Duo = factor(Duo,
+                    levels = 0:1,
+                    labels = c("Absent", "Present")),
+    Regr._D = factor(Regr._D,
+                    levels = 0:2,
+                    labels = c("Absent", "Focal", "Diffuse")))
+
+df_survival$G <- fct_recode(df_survival$G, NULL = "G1")
+df_survival$Duo <- fct_recode(df_survival$Duo, NULL = "NV")
+
+df_survival <- df_survival %>% 
+  rename(Grade = G, Nodes = Nnew, Resection_margin = R, 
+         Perineural_invasion = PN_Inv., Vascular_invasion = Emb.,
+         Necrosis = Necr., Vascular_alteration = Vasi,
+         Cellular_stroma = Str.cell., Stroma_Neoplasia_Ratio = perc_stroma,
+         Lymphocytes = Lymph., Granulocytes = Gran., Duodenal_invasion = Duo,
+         Regressive_changes = Regr._D,
+         Macrophages = M0) %>% 
+  arrange(desc(OS))
+
+df_survival <- df_survival %>% 
+  select(-census_event_free, -DFS, -census_OS, -OS) %>%
+  mutate(Lymphnodes = case_when(Lymphnodes == "Absent" | 
+                                  Lymphnodes == "1 positive lymphnode" ~ "0",
+                                Lymphnodes == "2-3 positive lymphnodes" |
+                                  Lymphnodes == ">3 positive lymphnodes" ~ "1"),
+         Stroma_Neoplasia_Ratio = case_when(
+           Stroma_Neoplasia_Ratio == "Stroma < Neoplasia" |
+             Stroma_Neoplasia_Ratio == "Stroma = Neoplasia" ~ "0",
+           Stroma_Neoplasia_Ratio == "Stroma > Neoplasia" ~ "1"))
+
+df_survival <- df_survival %>%
+  mutate(Lymphnodes = factor(Lymphnodes,
+                             levels = 0:1,
+                        labels = c("0-1", ">2")),
+         Stroma_Neoplasia_Ratio = factor(Stroma_Neoplasia_Ratio,
+                              levels = 0:1,
+                              labels = c("Neoplasia >= Stroma",
+                                         "Stroma > Neoplasia")))
+
+df_survival <- df_survival %>% 
+  left_join(df_surv_data, by = "AUS_ID")
+
+```
+## Survival analysis based on Overall Survival  
+
+First, I run the Kaplan-Meier survival analysis to estimate the survival probability for each variable
+
+```{r Kaplan Meier curves OS, echo=FALSE, warning=FALSE, out.height="30%", out.width="50%"}
+
+# Plot Kaplan-Meier curve for each categorical variable. 
+# KM is an "univariate analysis. They describe the survival according to one factor under investigation, but ignore the impact of any others."(http://www.sthda.com/english/wiki/cox-proportional-hazards-model)
+
+#https://github.com/kassambara/survminer/issues/95
+
+kaplan_meier_OS <- function(x){
+  fit <- do.call(survfit, list(formula = Surv(OS, census_OS) ~ df_survival[[x]], 
+                               data = df_survival))
+  
+  print(ggsurvplot(fit, pval = TRUE, legend.title = x,
+                   pval.method = TRUE,
+                   risk.table = TRUE,
+                   legend.labs = levels(df_survival[[x]]),
+                   surv.median.line = "hv",# Specify median survival
+                   risk.table.height = 0.3,
+                   palette = c("#d7191c", "#2c7bb6", "#008837", "#7b3294"),
+                   xlab = "Months",
+                   ggtheme = theme_bw())) # Change ggplot2 theme
+}
+
+kaplan_meier_DFS <- function(x){
+  fit <- do.call(survfit, list(formula = Surv(DFS, census_event_free) ~
+                                 df_survival[[x]], data = df_survival))
+  
+  print(ggsurvplot(fit, pval = TRUE, legend.title = x,
+                   risk.table = TRUE,
+                   legend.labs = levels(df_survival[[x]]),
+                   risk.table.height = 0.3,
+                   surv.median.line = "hv", # Specify median survival
+                   palette = c("#d7191c", "#2c7bb6", "#008837", "#7b3294"),
+                   xlab = "Months",
+                   ggtheme = theme_bw())) # Change ggplot2 theme
+}
+# Check it works for one variable
+# kaplan_meier_OS(x = "Treatment")
+# kaplan_meier_DFS(x = "Treatment")
+
+# Select categorical variables
+
+cols.factor <- df_survival %>% 
+  select_if(is.factor) %>% 
+  select(-AUS_ID, -Sex, -Site, -Lymphnodes, -Treatment) %>% 
+  names()
+
+# Run for loop to parse all categorical variables
+
+for (variable.name in cols.factor) {
+  # print(variable.name, quote = FALSE)
+  kaplan_meier_OS(x = variable.name)
+}
+
+```
+  
+    
+To test the association between the survival time and the morphological variables I compute the univariate Cox regression model.
+```{r Univariate Cox regression, echo = FALSE, include=FALSE}
+
+# "Cox proportional hazards regression analysis, which works for both quantitative predictor variables and for categorical variables. Furthermore, the Cox regression model extends survival analysis methods to assess simultaneously the effect of several risk factors on survival time."(http://www.sthda.com/english/wiki/cox-proportional-hazards-model)
+
+# Tested each variable, both categorical and continuous
+
+cox_univariate_OS <- function(x){
+  fit <- do.call(coxph, list(formula = Surv(OS, census_OS) ~ df_survival[[x]],
+                             data = df_survival))
+  fit
+}
+# To test for the proportional-hazards (PH) assumption se cox.zph
+# I don't know if it's correct to test the PH now or after the multivariate analysis
+
+fd <- coxph(Surv(OS, census_OS) ~ Treatment, data = df_survival) 
+
+
+# summary(fd)
+# ggforest(fd)
+# print(fd)
+# ggadjustedcurves(fd, variable = "Treatment", data = df_survival)
+# cox.zph(fit) %>% plot()
+# ggcoxdiagnostics(fd)
+# 
+# cox_univariate(x = "Treatment") %>% cox_as_data_frame()
+# ggadjustedcurves(variable = "Treatment", data = df_survival)
+
+# Select all covariates (categorical and numeric)
+  
+covariates <- df_survival %>% 
+  select(-AUS_ID, -census_event_free, -DFS, -census_OS, -OS) %>% 
+  names()
+
+# Run for loop to parse all variables but this table doesn't show the likelihood
+# ratio, so I run each variable separetely
+# df <- NULL
+# for (variable.name in covariates) {
+#   # print(variable.name, quote = FALSE)
+#   res_coxph <- cox_univariate_OS(x = variable.name)
+#   res <- print(cox_as_data_frame(res_coxph))
+#   df <- rbind(df, res)
+# }
+
+# write_csv(df, here("NGS/data", "res_cox.csv"))
+# 
+# res_cox <- read.csv(here("NGS/data", "res_cox_modified.csv"))
+# df <- res_cox
+
+# cox_univariate_OS(x = "Sex")  # p = 0.38
+# cox_univariate_OS(x = "Site") # p = 0.79
+# cox_univariate_OS(x = "Grade") # p = 0.21
+# cox_univariate_OS(x = "Nodes") # p = 0.5
+# cox_univariate_OS(x = "Resection_margin") # p = 0.28
+# cox_univariate_OS(x= "Dispersion") # p = 0.044
+# cox_univariate_OS(x = "Perineural_invasion")  # p = 0.02
+# cox_univariate_OS(x = "Vascular_invasion") # p = 0.89
+# cox_univariate_OS(x = "Lymphnodes") # p = 0.41
+# cox_univariate_OS(x = "Necrosis") # p = 0.042
+# cox_univariate_OS(x = "Vascular_alteration") # p = 0.045
+# cox_univariate_OS(x = "PanIN_IPMN") # p = 0.72
+# cox_univariate_OS(x = "Keloid") # p = 0.13
+# cox_univariate_OS(x = "Hyaline") # p = 0.69
+# cox_univariate_OS(x = "Cellular_stroma") # p = 0.83
+# cox_univariate_OS(x = "Stroma_Neoplasia_Ratio") # p = 0.88
+# cox_univariate_OS(x = "TLS") # p = 0.37
+# cox_univariate_OS(x = "Lymphocytes") # p = 0.97
+# cox_univariate_OS(x = "Granulocytes") # p = 0.32
+# cox_univariate_OS(x = "Macrophages") # p = 0.02
+# cox_univariate_OS(x = "Age") # p  0.66
+# cox_univariate_OS(x = "LN_Ratio") # p = 0.51
+```
+
+```{r  Print Univariate Cox regression OS, echo = FALSE, message = FALSE}
+cox_tab_OS <- tbl_uvregression(df_survival[c("Grade", "Nodes", "Resection_margin",
+                               "Dispersion", "Perineural_invasion",
+                               "Vascular_invasion", "Lymphnodes",
+                               "Necrosis", "Vascular_alteration",
+                               "PanIN_IPMN", "Keloid", "Hyaline",
+                               "Cellular_stroma", "Stroma_Neoplasia_Ratio",
+                               "TLS", "Lymphocytes", "Granulocytes",
+                               "Macrophages", "Mucin", "Duodenal_invasion",
+                               "Regressive_changes",
+                               "LN_Ratio", "OS", "census_OS")],
+                 method = coxph,
+                 y = Surv(OS, census_OS),
+                 exponentiate = TRUE) %>% 
+  bold_labels() %>% 
+  bold_p(t = .05)
+knit_print(cox_tab_OS)
+```
+
+Due to the small number of cases, the variables showing the likelihood ratio < 0.1 were considered statistically significant and included in the multivariate analysis.
+```{r Multivariate Cox regression, echo = FALSE, out.height="50%", out.width="100%"}
+# I used only the significant variables from the univariate cox regression
+
+fit_coxph <- coxph(Surv(OS, census_OS) ~  + Perineural_invasion + Macrophages +
+                     Necrosis, 
+                   data = df_survival)
+summary(fit_coxph)
+for_plot_B_OS <- ggforest(fit_coxph, data = df_survival,
+                          fontsize = 1, main = "Hazard ratio of OS",
+                          c(0.02, 0.22, 0.35))
+
+jpeg(here("NGS/figures", "for_plot_B_OS.jpeg"), width = 25, height = 10, units = "cm",
+     res = 72, type = "windows")
+HM <- plot(for_plot_B_OS)
+dev.off()
+```
+
+Then, I assess the validity of the Cox model.  
+First, I test the proportional hazards assumption for each covariate. The function cox.zph() correlates the corresponding set of scaled Schoenfeld residuals with time, to test for independence between residuals and time. Additionally, it performs a global test for the model as a whole.  
+Second, I test the influence of the outliers. 
+```{r Check Cox model assumptions, echo=FALSE, out.height="40%", out.width="50%"}
+zph <- cox.zph(fit_coxph)
+zph
+plot(zph)
+# (see http://www.sthda.com/english/wiki/cox-model-assumptions#testing-proportional-hazards-assumption)
+
+ggcoxdiagnostics(fit_coxph, type = "dfbeta", linear.predictions = FALSE,
+                 ggtheme = theme_bw())
+
+ggcoxdiagnostics(fit_coxph, type = "deviance", linear.predictions = FALSE,
+                 ggtheme = theme_bw())
+```
+
+
+From the output above, the test for the proportional-hazards assumption is not statistically significant for each of the covariates.In addition, the global test is  not statistically significant, as well. Therefore, we can assume the proportional hazards.
+
+The dfbeta plots show some outliers.  
+
+**Questions:**
+Is the pattern of the dfbeta graphs relevant? Is it influencing the statistical significance of the analysis?  
+
+**Conclusions:**  
+The analysis shows that the hazard ratio tend to be higher in presence of perineural invasion, necrosis and macrophagic infiltration, even if only the latter reaches statistical significance. 
+```
+```
+---
+## Survival analysis based on Disease-free survival  
+I repeat the same analysis based on the Disease Free Survival.  
+First, I estimate the survival probability for each variable with the Kaplan-Meier curves and the logrank test.  
+Then, I evaluate the association between survival time and each variable with the univariate Cox regression model. Statistically significant covariates are included in the multivariate model.
+```{r Kaplan-Meyer curves DFS, echo=FALSE, warning=FALSE,out.height="30%", out.width="50%"}
+for (variable.name in cols.factor) {
+  # print(variable.name, quote = FALSE)
+  kaplan_meier_DFS(x = variable.name)
+}
+```
+
+
+```{r Cox univariate regression model DFS, echo=FALSE, include=FALSE}
+cox_univariate_DFS <- function(x){
+  fit <- do.call(coxph, list(formula = Surv(DFS, census_event_free) ~
+                               df_survival[[x]], data = df_survival))
+  fit
+}
+# To test for the proportional-hazards (PH) assumption se cox.zph
+# I don't know if it's correct to test the PH now or after the multivariate analysis
+
+
+
+# Select all covariates (categorical and numeric)
+  
+covariates <- df_survival %>% 
+  select(-AUS_ID, -census_event_free, -DFS, -census_OS, -OS) %>% 
+  names()
+
+# Run for loop to parse all variables
+# df_DFS <- NULL
+# for (variable.name in covariates) {
+#   # print(variable.name, quote = FALSE)
+#   res_coxph <- cox_univariate_DFS(x = variable.name)
+#   res <- print(cox_as_data_frame(res_coxph))
+#   df_DFS <- rbind(df_DFS, res)
+# }
+
+# write_csv(df, here("NGS/data", "res_cox.csv"))
+# 
+# res_cox <- read.csv(here("NGS/data", "res_cox_modified.csv"))
+# df <- res_cox
+
+# df_filtered <- df %>% 
+#   filter(p < 0.05)
+
+# cox_univariate_DFS(x = "Sex") # p = 0.79
+# cox_univariate_DFS(x = "Site") # p = 0.47
+# cox_univariate_DFS(x = "Grade") # p = 0.02
+# cox_univariate_DFS(x = "Nodes") # p = 0.29
+# cox_univariate_DFS(x = "Resection_margin") # p = 0.23
+# cox_univariate_DFS(x= "Dispersion") # p = 0.16
+# cox_univariate_DFS(x = "Perineural_invasion") # p = 0.39
+# cox_univariate_DFS(x = "Vascular_invasion") # p = 0.75 
+# cox_univariate_DFS(x = "Lymphnodes") # p = 0.24
+# cox_univariate_DFS(x = "Necrosis") # p = 0.12
+# cox_univariate_DFS(x = "Vascular_alteration") # p = 0.32
+# cox_univariate_DFS(x = "PanIN_IPMN") # p = 0.27
+# cox_univariate_DFS(x = "Keloid") # p = 0.38
+# cox_univariate_DFS(x = "Hyaline") # p = 0.91
+# cox_univariate_DFS(x = "Cellular_stroma") # p = 0.57
+# cox_univariate_DFS(x = "Stroma_Neoplasia_Ratio") # p = 0.96
+# cox_univariate_DFS(x = "TLS") # p = 0.72
+# cox_univariate_DFS(x = "Lymphocytes") # p = 0.54
+# cox_univariate_DFS(x = "Granulocytes") # p = 0.3
+# cox_univariate_DFS(x = "Macrophages") # p = 0.042
+# cox_univariate_DFS(x = "Age") # p  0.92
+# cox_univariate_DFS(x = "LN_Ratio")  # p = 0.38
+```
+
+```{r  Print Univariate Cox regression DFS, echo = FALSE, message = FALSE}
+
+cox_tab_DFS <- tbl_uvregression(df_survival[c("Grade", "Nodes", "Resection_margin",
+                               "Dispersion", "Perineural_invasion",
+                               "Vascular_invasion", "Lymphnodes",
+                               "Necrosis", "Vascular_alteration",
+                               "PanIN_IPMN", "Keloid", "Hyaline",
+                               "Cellular_stroma", "Stroma_Neoplasia_Ratio",
+                               "TLS", "Lymphocytes", "Granulocytes",
+                               "Macrophages", "LN_Ratio",
+                               "Mucin", "Duodenal_invasion",
+                               "Regressive_changes", "DFS", "census_event_free")],
+                 method = coxph,
+                 y = Surv(DFS, census_event_free),
+                 exponentiate = TRUE) %>% 
+  bold_labels() %>% 
+  bold_p(t = .05)
+knit_print(cox_tab_DFS)
+```
+
+```{r Cox multivariate regression model DFS, echo=FALSE, out.height="100%", out.width="100%"}
+fit_coxph_DFS <- coxph(Surv(DFS, census_event_free) ~ Grade + 
+                         Macrophages, 
+                       data = df_survival)
+summary(fit_coxph_DFS)
+for_plot_B_DFS <- ggforest(fit_coxph_DFS, data = df_survival, fontsize = 1,
+                           main = "Hazard ratio of DFS",
+                           c(0.02, 0.22, 0.33))
+
+jpeg(here("NGS/figures", "for_plot_B_DFS.jpeg"), width = 30, height = 10, units = "cm",
+     res = 72, type = "windows")
+HM <- plot(for_plot_B_DFS)
+dev.off()
+```
+
+
+```{r Cox multivariate regression model diagnostics DFS, echo=FALSE, out.height="40%", out.width="50%"}
+zph_DFS <- cox.zph(fit_coxph_DFS)
+zph_DFS
+plot(zph_DFS)
+# (see http://www.sthda.com/english/wiki/cox-model-assumptions#testing-proportional-hazards-assumption)
+
+ggcoxdiagnostics(fit_coxph_DFS, type = "dfbeta", linear.predictions = FALSE,
+                 ggtheme = theme_bw())
+
+ggcoxdiagnostics(fit_coxph_DFS, type = "deviance", linear.predictions = FALSE,
+                 ggtheme = theme_bw())
+```
+  
+  From the output above, the test for the proportional-hazards assumption is not statistically significant for each of the covariates.In addition, the global test is  not statistically significant, as well. Therefore, we can assume the proportional hazards.
+
+The dfbeta plots show some outliers.  
+
+**Questions:**
+Is the pattern of the dfbeta graphs relevant? Is it influencing the statistical significance of the analysis?   
+
+**Conclusions:**  
+In the multivariate analysis, G3 grade and the presence of macrophages are negative prognostic factors.
